@@ -1,7 +1,7 @@
 [project]
 name = "wp-plugin-insights-mcp"
 version = "0.1.0"
-description = "Add your description here"
+description = "MCP server for public WordPress.org plugin data: search, installs, ratings, reviews, releases and downloads"
 readme = "README.md"
 authors = [
     { name = "Alex Fernandes Semedo", email = "334292588+alexfernandessemedo@users.noreply.github.com" }
@@ -9,7 +9,7 @@ authors = [
 requires-python = ">=3.10"
 dependencies = [
     "httpx>=0.28.1",
-    "mcp[cli]>=2.2.0",
+    "mcp[cli]>=2.2.0,<3",
 ]
 
 [project.scripts]
