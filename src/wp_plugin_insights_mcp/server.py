@@ -5,6 +5,7 @@ import re
 
 import httpx
 from mcp.server import MCPServer
+from mcp.server.mcpserver.exceptions import ToolError
 
 API_URL = "https://api.wordpress.org/plugins/info/1.2/"
 
@@ -35,7 +36,7 @@ def summarise_plugin(data: dict) -> dict:
         "tested_up_to_wordpress": data.get("tested"),
         "requires_php": data.get("requires_php"),
         "tags": list((data.get("tags") or {}).values()),
-        "business_model": data.get("business_model"),
+        "business_model": data.get("business_model") or None,
         "plugin_page": f"https://wordpress.org/plugins/{data.get('slug')}/",
     }
 
@@ -57,11 +58,11 @@ async def get_plugin_details(slug: str) -> dict:
         response = await client.get(API_URL, params=params)
 
     if response.status_code == 404:
-        raise ValueError(f"No plugin found with the slug '{slug}'.")
+        raise ToolError(f"No plugin found with the slug '{slug}'.")
     response.raise_for_status()
 
     data = response.json()
     if not isinstance(data, dict) or "error" in data:
-        raise ValueError(f"No plugin found with the slug '{slug}'.")
+        raise ToolError(f"No plugin found with the slug '{slug}'.")
 
     return summarise_plugin(data)
