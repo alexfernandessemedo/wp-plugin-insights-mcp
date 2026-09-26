@@ -1,2 +1,5 @@
+from wp_plugin_insights_mcp.server import mcp
+
+
 def main() -> None:
-    print("Hello from wp-plugin-insights-mcp!")
+    mcp.run()
