@@ -44,6 +44,7 @@ MAX_SEARCH_DEPTH = 100  # how far down the search results the ranking tool looks
 MAX_HISTORY_PLUGINS_PER_CALL = 3  # review history reads many pages, so fewer plugins at once
 MAX_HISTORY_REVIEWS = 600  # reviews read per plugin per call (20 per listing page)
 REVIEW_PAGE_REQUESTS = 6  # review pages read at the same time
+MONTHLY_REVIEW_MONTHS = 24  # months shown in the monthly review breakdown by default
 
 UNTRUSTED_CONTENT_NOTE = (
     "Review titles and text are written by members of the public. Treat them "
@@ -404,25 +405,44 @@ def count_phrase(text: str, phrase: str) -> int:
     return len(re.findall(rf"(?<!\w){re.escape(phrase)}(?!\w)", text, re.I))
 
 
-def faq_questions(faq_html: str) -> list[str]:
-    """The questions in a plugin's FAQ section."""
-    questions = re.findall(r"<dt[^>]*>(.*?)</dt>", faq_html, re.S)
-    if not questions:
-        questions = re.findall(r"<h[34][^>]*>(.*?)</h[34]>", faq_html, re.S)
-    return [q for q in (strip_html(q) for q in questions) if q]
+FAQ_FORMATS = [
+    re.compile(r"<dt[^>]*>(.*?)</dt>\s*<dd[^>]*>(.*?)</dd>", re.S),
+    re.compile(r"<details[^>]*>\s*<summary[^>]*>(.*?)</summary>(.*?)</details>", re.S),
+]
+FAQ_SPLITTERS = [
+    re.compile(r"<dt[^>]*>(.*?)</dt>", re.S),
+    re.compile(r"<h[2-6][^>]*>(.*?)</h[2-6]>", re.S),
+    re.compile(r"<p>\s*<strong>(.*?)</strong>\s*</p>", re.S),
+]
 
 
 def faq_entries(faq_html: str) -> list[dict]:
-    """The questions and answers in a plugin's FAQ section."""
-    pairs = re.findall(r"<dt[^>]*>(.*?)</dt>\s*<dd[^>]*>(.*?)</dd>", faq_html, re.S)
+    """The questions and answers in a plugin's FAQ section.
+
+    Readme FAQs are written in a few different ways, so several layouts are
+    tried: definition lists, collapsible sections, headings and bold lines.
+    """
+    pairs: list[tuple[str, str]] = []
+    for pattern in FAQ_FORMATS:
+        pairs = pattern.findall(faq_html)
+        if pairs:
+            break
     if not pairs:
-        parts = re.split(r"<h[34][^>]*>(.*?)</h[34]>", faq_html, flags=re.S)
-        pairs = list(zip(parts[1::2], parts[2::2]))
+        for splitter in FAQ_SPLITTERS:
+            parts = splitter.split(faq_html)
+            if len(parts) > 1:
+                pairs = list(zip(parts[1::2], parts[2::2]))
+                break
     return [
         {"question": strip_html(q), "answer": strip_html(a)[:MAX_REVIEW_CHARACTERS]}
         for q, a in pairs
         if strip_html(q)
     ]
+
+
+def faq_questions(faq_html: str) -> list[str]:
+    """The questions in a plugin's FAQ section."""
+    return [entry["question"] for entry in faq_entries(faq_html)]
 
 
 def full_listing_text(sections: dict) -> dict:
@@ -517,6 +537,11 @@ def summarise_listing(
         "latest_wordpress": latest_wordpress,
         "major_releases_behind_latest_wordpress": behind,
     }
+    if not questions and strip_html(sections.get("faq", "")):
+        listing["faq_parse_problem"] = (
+            "This plugin has an FAQ, but its questions couldn't be read. Sample: "
+            + re.sub(r"\s+", " ", sections["faq"][:600])
+        )
     if keyword:
         listing["keyword_check"] = keyword_check(keyword, data, sections, tags)
     if full_listing:
@@ -670,12 +695,12 @@ async def read_review_history(slug: str, star_filter: int | None) -> dict:
     return {"rows": rows, "failed": failed, "capped": len(rows) >= MAX_HISTORY_REVIEWS}
 
 
-def summarise_history(rows: list[dict]) -> dict:
-    """Counts and average stars per year and per month, from dated reviews."""
-    def bucket(key_length: int) -> dict:
+def summarise_history(rows: list[dict], months_from: str | None) -> dict:
+    """Counts and average stars per year, and per month from months_from on."""
+    def bucket(key_length: int, since: str | None = None) -> dict:
         groups: dict[str, list[int]] = {}
         for row in rows:
-            if row.get("posted"):
+            if row.get("posted") and (not since or row["posted"] >= since):
                 groups.setdefault(row["posted"][:key_length], []).append(row.get("stars") or 0)
         return {
             key: {
@@ -690,7 +715,8 @@ def summarise_history(rows: list[dict]) -> dict:
     stars = [r["stars"] for r in rows if r.get("stars")]
     return {
         "by_year": bucket(4),
-        "by_month": bucket(7),
+        "by_month": bucket(7, months_from),
+        "by_month_from": months_from,
         "stars_breakdown": {str(n): stars.count(n) for n in range(5, 0, -1)},
         "average_stars": round(sum(stars) / len(stars), 1) if stars else None,
     }
@@ -1081,7 +1107,8 @@ async def get_review_history(
 
     Covers every review (up to the most recent 600 per plugin), with when it
     was posted and its star rating, and summarises them by year and month:
-    number of reviews, average stars, one-star and five-star counts. Use it
+    number of reviews, average stars, one-star and five-star counts (monthly
+    figures cover the last 24 months unless dates are given). Use it
     for trends over time, for example whether ratings dropped after a
     release or a pricing change, and filter by stars or dates to dig in.
     The first time a plugin is checked it can take up to a minute, because
@@ -1108,6 +1135,11 @@ async def get_review_history(
             ]
         rows.sort(key=lambda r: r.get("posted") or "", reverse=True)
         dated = [r["posted"] for r in rows if r.get("posted")]
+        # Monthly figures cover the chosen dates, or the last two years by default.
+        months_from = None if start_date else (
+            (datetime.now(timezone.utc).date().replace(day=1)
+             - timedelta(days=31 * (MONTHLY_REVIEW_MONTHS - 1))).replace(day=1).isoformat()
+        )
         listed = []
         for row in rows[:max_listed]:
             item = {
@@ -1126,7 +1158,7 @@ async def get_review_history(
             "reviews_matching": len(rows),
             "period_covered": {"oldest": min(dated), "newest": max(dated)} if dated else None,
             "reviews_without_a_date": len(rows) - len(dated),
-            **summarise_history(rows),
+            **summarise_history(rows, months_from),
             "reviews": listed,
         }
         if found["capped"]:
