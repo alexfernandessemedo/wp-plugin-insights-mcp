@@ -432,7 +432,9 @@ FAQ_FORMATS = [
     re.compile(r"<details[^>]*>\s*<summary[^>]*>(.*?)</summary>(.*?)</details>", re.S),
 ]
 FAQ_SPLITTERS = [
-    re.compile(r"<dt[^>]*>(.*?)</dt>", re.S),
+    # WordPress.org's API opens each question with <dt> but closes it with
+    # </h4>, with the answer in plain paragraphs after it.
+    re.compile(r"<dt[^>]*>(.*?)</(?:dt|h[1-6])>", re.S),
     re.compile(r"<h[2-6][^>]*>(.*?)</h[2-6]>", re.S),
     re.compile(r"<p>\s*<strong>(.*?)</strong>\s*</p>", re.S),
 ]
