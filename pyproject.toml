@@ -1,7 +1,7 @@
 [project]
 name = "wp-plugin-insights-mcp"
-version = "0.1.0"
-description = "MCP server for public WordPress.org plugin data: search, installs, ratings, reviews, releases and downloads"
+version = "0.2.0"
+description = "MCP server for public WordPress.org plugin data: search rankings, listings, installs, ratings, reviews, releases and downloads"
 readme = "README.md"
 authors = [
     { name = "Alex Fernandes Semedo", email = "334292588+alexfernandessemedo@users.noreply.github.com" }
