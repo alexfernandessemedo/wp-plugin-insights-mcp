@@ -95,7 +95,29 @@ def slug_list(most: int) -> object:
 Slugs = slug_list(MAX_PLUGINS_PER_CALL)
 DownloadSlugs = slug_list(MAX_DOWNLOAD_PLUGINS_PER_CALL)
 
-mcp = MCPServer("WP Plugin Insights")
+INSTRUCTIONS = """\
+Public WordPress.org plugin data. When a request is vague, don't ask
+clarifying questions first: use these defaults, then say in one line which
+assumptions you made (period, competitors, search terms) so the user can
+change them.
+
+- "How is X doing?": use get_plugin_details, get_recent_reviews and
+  get_download_history (last 90 days) together.
+- Competitors: if the user doesn't name any, use the plugins ranking highest
+  in search for X's own tags. Call get_search_ranking with just X's slug and
+  it searches X's top tags. Say that's how you chose them.
+- Search visibility ("why does X rank low?"): use get_search_ranking, then
+  get_plugin_listing for X and the plugins above it, with the search term as
+  the keyword.
+- Review trends or "what are people complaining about?": use
+  get_review_history; for complaints, filter to 1 and 2 stars and include
+  the text.
+- Downloads with no period given: the last 90 days. Reviews with no period:
+  everything available, with the period covered stated.
+- Several plugins or search terms: always pass them together in one call.
+"""
+
+mcp = MCPServer("WP Plugin Insights", instructions=INSTRUCTIONS)
 
 
 # --- Fetching data --------------------------------------------------------
@@ -914,16 +936,16 @@ async def get_plugin_listing(
 @mcp.tool(annotations=READ_ONLY)
 async def get_search_ranking(
     searches: Annotated[
-        list[Annotated[str, Field(min_length=1, max_length=200)]],
+        list[Annotated[str, Field(min_length=1, max_length=200)]] | None,
         Field(
-            min_length=1,
             max_length=5,
             description=(
                 'One or more search terms to check, for example "cookie consent" '
-                'and "cookie banner". Pass several in one call to compare keywords.'
+                "and \"cookie banner\". Pass several in one call to compare keywords. "
+                "Leave empty to use the first plugin's own top 3 tags."
             ),
         ),
-    ],
+    ] = None,
     slugs: Annotated[
         list[Slug] | None,
         Field(
@@ -949,6 +971,9 @@ async def get_search_ranking(
 ) -> dict:
     """See where plugins rank in WordPress.org search for one or more terms.
 
+    With no search terms, it uses the first plugin's own top 3 tags, which
+    is also a quick way to find a plugin's main competitors.
+
     For each term, lists the top results in order, with installs, ratings
     and update dates, and reports the position of any plugins you ask
     about. Positions come from WordPress.org's plugin search API, which
@@ -956,6 +981,15 @@ async def get_search_ranking(
     order can shift from day to day. Combine with get_plugin_listing (using
     a term as the keyword) to see why plugins rank where they do.
     """
+
+    chosen_from_tags = None
+    if not searches:
+        if not slugs:
+            raise ToolError("Give a search term, or a plugin whose tags should be used.")
+        searches = list((((await fetch_plugin(slugs[0])).get("tags")) or {}).values())[:3]
+        if not searches:
+            raise ToolError(f"'{slugs[0]}' has no tags to search for. Give a search term.")
+        chosen_from_tags = slugs[0]
 
     async def ranking(term: str) -> dict:
         data = await run_search(term, None, depth, slim=True)
@@ -992,6 +1026,11 @@ async def get_search_ranking(
         return result
 
     result = await for_each_search(searches, ranking)
+    if chosen_from_tags:
+        result["search_terms_chosen"] = (
+            f"No search terms were given, so these are {chosen_from_tags}'s own top "
+            "tags. Tell the user, and offer to check other terms."
+        )
     result["content_note"] = DEVELOPER_CONTENT_NOTE
     return result
 

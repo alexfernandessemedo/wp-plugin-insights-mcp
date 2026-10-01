@@ -18,6 +18,8 @@ Built by Alex Fernandes Semedo, Product Manager for CMS Integrations at Usercent
 
 You don't need to know a plugin's exact WordPress.org name. Claude searches for it first, and only asks you to confirm if more than one plugin could match.
 
+Vague questions work too. The server tells Claude what to assume when you don't say: the last 90 days for downloads, all available reviews, and, if you don't name competitors, the plugins ranking highest for your plugin's own tags. Claude says which assumptions it made, so you can change them.
+
 ## Tools
 
 - **search_plugins**: find plugins by name, keyword or tag, for several names at once.
