@@ -691,12 +691,15 @@ async def get_plugin_listing(
 
 @mcp.tool(annotations=READ_ONLY)
 async def get_search_ranking(
-    search: Annotated[
-        str,
+    searches: Annotated[
+        list[Annotated[str, Field(min_length=1, max_length=200)]],
         Field(
             min_length=1,
-            max_length=200,
-            description='The search term to check, for example "cookie consent".',
+            max_length=5,
+            description=(
+                'One or more search terms to check, for example "cookie consent" '
+                'and "cookie banner". Pass several in one call to compare keywords.'
+            ),
         ),
     ],
     slugs: Annotated[
@@ -719,60 +722,54 @@ async def get_search_ranking(
         ),
     ] = 50,
     show: Annotated[
-        int, Field(ge=1, le=30, description="How many top results to list in full.")
+        int, Field(ge=1, le=30, description="How many top results to list in full per term.")
     ] = 10,
 ) -> dict:
-    """See where plugins rank in WordPress.org search for a search term.
+    """See where plugins rank in WordPress.org search for one or more terms.
 
-    Lists the top results in order, with installs, ratings and update
-    dates, and reports the position of any plugins you ask about. Positions
-    come from WordPress.org's plugin search API, which should closely match
-    the search on wordpress.org/plugins, though the order can shift from
-    day to day. Combine with get_plugin_listing (using the same term as the
-    keyword) to see why plugins rank where they do.
+    For each term, lists the top results in order, with installs, ratings
+    and update dates, and reports the position of any plugins you ask
+    about. Positions come from WordPress.org's plugin search API, which
+    should closely match the search on wordpress.org/plugins, though the
+    order can shift from day to day. Combine with get_plugin_listing (using
+    a term as the keyword) to see why plugins rank where they do.
     """
-    params = {
-        "action": "query_plugins",
-        "request[search]": search,
-        "request[per_page]": depth,
-        "request[page]": 1,
-    }
-    for field in ("description", "sections", "versions", "reviews", "banners", "icons",
-                  "screenshots", "contributors", "compatibility", "downloadlink"):
-        params[f"request[fields][{field}]"] = 0
-    data = await get_json(API_URL, params)
-    if not isinstance(data, dict) or not isinstance(data.get("plugins"), list):
-        raise ToolError("WordPress.org sent search results in an unexpected format.")
 
-    ranked = [
-        {
-            "position": position,
-            "name": strip_html(plugin.get("name", "")),
-            "slug": plugin.get("slug"),
-            "active_installs_at_least": plugin.get("active_installs"),
-            "rating_out_of_5": round((plugin.get("rating") or 0) / 20, 1),
-            "number_of_ratings": plugin.get("num_ratings"),
-            "last_updated": plugin.get("last_updated"),
-            "tested_up_to_wordpress": plugin.get("tested"),
-        }
-        for position, plugin in enumerate(
-            (p for p in data["plugins"][:depth] if isinstance(p, dict)), start=1
-        )
-    ]
-    positions = {row["slug"]: row for row in ranked}
-    info = data.get("info") if isinstance(data.get("info"), dict) else {}
-    result = {
-        "search": search,
-        "total_matches": info.get("results"),
-        "looked_through": len(ranked),
-        "top_results": ranked[:show],
-    }
-    if slugs:
-        result["requested_plugins"] = [
-            positions.get(slug)
-            or {"slug": slug, "position": None, "note": f"Not in the top {len(ranked)} results."}
-            for slug in dict.fromkeys(slugs)
+    async def ranking(term: str) -> dict:
+        data = await run_search(term, None, depth, slim=True)
+        ranked = [
+            {
+                "position": position,
+                "name": strip_html(plugin.get("name", "")),
+                "slug": plugin.get("slug"),
+                "active_installs_at_least": plugin.get("active_installs"),
+                "rating_out_of_5": round((plugin.get("rating") or 0) / 20, 1),
+                "number_of_ratings": plugin.get("num_ratings"),
+                "last_updated": plugin.get("last_updated"),
+                "tested_up_to_wordpress": plugin.get("tested"),
+            }
+            for position, plugin in enumerate(
+                (p for p in data["plugins"][:depth] if isinstance(p, dict)), start=1
+            )
         ]
+        positions = {row["slug"]: row for row in ranked}
+        info = data.get("info") if isinstance(data.get("info"), dict) else {}
+        result = {
+            "search": term,
+            "total_matches": info.get("results"),
+            "looked_through": len(ranked),
+            "top_results": ranked[:show],
+        }
+        if slugs:
+            result["requested_plugins"] = [
+                positions.get(slug)
+                or {"slug": slug, "position": None,
+                    "note": f"Not in the top {len(ranked)} results."}
+                for slug in dict.fromkeys(slugs)
+            ]
+        return result
+
+    result = await for_each_search(searches, ranking)
     result["content_note"] = DEVELOPER_CONTENT_NOTE
     return result
 
@@ -1011,15 +1008,69 @@ async def get_download_history(
     return result
 
 
+async def run_search(search: str | None, tag: str | None, per_page: int, slim: bool) -> dict:
+    """Run one WordPress.org plugin search and return its raw results."""
+    params = {"action": "query_plugins", "request[per_page]": per_page, "request[page]": 1}
+    if search:
+        params["request[search]"] = search
+    if tag:
+        params["request[tag]"] = tag
+    if slim:
+        for field in ("description", "sections", "versions", "reviews", "banners", "icons",
+                      "screenshots", "contributors", "compatibility", "downloadlink"):
+            params[f"request[fields][{field}]"] = 0
+    data = await get_json(API_URL, params)
+    if not isinstance(data, dict) or not isinstance(data.get("plugins"), list):
+        raise ToolError("WordPress.org sent search results in an unexpected format.")
+    return data
+
+
+async def for_each_search(searches: list[str], work) -> dict:
+    """Run several searches at once; a failed one is reported, not fatal."""
+    unique = list(dict.fromkeys(term.strip() for term in searches if term.strip()))
+    if not unique:
+        raise ToolError("Give at least one search term.")
+    limit = asyncio.Semaphore(PARALLEL_REQUESTS)
+
+    async def run(term: str):
+        async with limit:
+            try:
+                return await work(term)
+            except ToolError as error:
+                return error
+
+    outcomes = await asyncio.gather(*(run(term) for term in unique))
+    results = [o for o in outcomes if not isinstance(o, ToolError)]
+    errors = [
+        {"search": term, "error": str(o)}
+        for term, o in zip(unique, outcomes)
+        if isinstance(o, ToolError)
+    ]
+    if not results:
+        raise ToolError(" ".join(e["error"] for e in errors))
+    result = {"searches": results}
+    if errors:
+        result["errors"] = errors
+    return result
+
+
+SearchTerms = Annotated[
+    list[Annotated[str, Field(min_length=1, max_length=200)]],
+    Field(
+        min_length=1,
+        max_length=MAX_PLUGINS_PER_CALL,
+        description=(
+            "One or more search terms, such as plugin names or what a plugin "
+            "does. When the user names several plugins or keywords, pass them "
+            "all in one call rather than searching one at a time."
+        ),
+    ),
+]
+
+
 @mcp.tool(annotations=READ_ONLY)
 async def search_plugins(
-    search: Annotated[
-        str | None,
-        Field(
-            max_length=200,
-            description="Words to search for, such as a plugin's name or what it does.",
-        ),
-    ] = None,
+    searches: SearchTerms | None = None,
     tag: Annotated[
         str | None,
         Field(
@@ -1029,50 +1080,50 @@ async def search_plugins(
         ),
     ] = None,
     max_results: Annotated[
-        int, Field(ge=1, le=10, description="How many plugins to return.")
+        int, Field(ge=1, le=10, description="How many plugins to return per search.")
     ] = 5,
 ) -> dict:
     """Search the WordPress.org plugin directory by name, keyword or tag.
 
-    Use this to find a plugin's slug when you only know its name, then use
-    the slug with the other tools. If one result clearly matches what the
-    user meant, use it without asking. If several could match, show the
-    top few and ask which one they meant. Only ask the user for the
-    plugin's WordPress.org URL if no result matches. Results are in
-    WordPress.org's own order of relevance. Also useful for finding
-    competitors by keyword or tag. To see search positions in depth, use
-    get_search_ranking.
+    Use this to find plugins' slugs when you only know their names, then
+    use the slugs with the other tools. When the user names several plugins,
+    search for all of them in one call. If one result clearly matches what
+    the user meant, use it without asking. If several could match, show the
+    top few and ask which one they meant. Only ask the user for a plugin's
+    WordPress.org URL if no result matches. Results are in WordPress.org's
+    own order of relevance. Also useful for finding competitors by keyword
+    or tag. To see search positions in depth, use get_search_ranking.
     """
-    if not search and not tag:
+    if not searches and not tag:
         raise ToolError("Give a search term, a tag, or both.")
 
-    params = {"action": "query_plugins", "request[per_page]": max_results}
-    if search:
-        params["request[search]"] = search
-    if tag:
-        params["request[tag]"] = tag
-    data = await get_json(API_URL, params)
-    if not isinstance(data, dict) or not isinstance(data.get("plugins"), list):
-        raise ToolError("WordPress.org sent search results in an unexpected format.")
-
-    results = [
-        {
-            "name": strip_html(plugin.get("name", "")),
-            "slug": plugin.get("slug"),
-            "short_description": strip_html(plugin.get("short_description", "")),
-            "active_installs_at_least": plugin.get("active_installs"),
-            "rating_out_of_5": round((plugin.get("rating") or 0) / 20, 1),
-            "number_of_ratings": plugin.get("num_ratings"),
-            "last_updated": plugin.get("last_updated"),
-            "tested_up_to_wordpress": plugin.get("tested"),
-            "tags": list((plugin.get("tags") or {}).values()),
+    async def one(term: str | None) -> dict:
+        data = await run_search(term, tag, max_results, slim=False)
+        info = data.get("info") if isinstance(data.get("info"), dict) else {}
+        return {
+            "search": term,
+            "tag": tag,
+            "total_matches": info.get("results"),
+            "results": [
+                {
+                    "name": strip_html(plugin.get("name", "")),
+                    "slug": plugin.get("slug"),
+                    "short_description": strip_html(plugin.get("short_description", "")),
+                    "active_installs_at_least": plugin.get("active_installs"),
+                    "rating_out_of_5": round((plugin.get("rating") or 0) / 20, 1),
+                    "number_of_ratings": plugin.get("num_ratings"),
+                    "last_updated": plugin.get("last_updated"),
+                    "tested_up_to_wordpress": plugin.get("tested"),
+                    "tags": list((plugin.get("tags") or {}).values()),
+                }
+                for plugin in data["plugins"][:max_results]
+                if isinstance(plugin, dict)
+            ],
         }
-        for plugin in data["plugins"][:max_results]
-        if isinstance(plugin, dict)
-    ]
-    info = data.get("info") if isinstance(data.get("info"), dict) else {}
-    return {
-        "total_matches": info.get("results"),
-        "results": results,
-        "content_note": DEVELOPER_CONTENT_NOTE,
-    }
+
+    if searches:
+        result = await for_each_search(searches, one)
+    else:
+        result = {"searches": [await one(None)]}
+    result["content_note"] = DEVELOPER_CONTENT_NOTE
+    return result

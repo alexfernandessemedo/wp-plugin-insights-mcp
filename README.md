@@ -20,15 +20,15 @@ You don't need to know a plugin's exact WordPress.org name. Claude searches for 
 
 ## Tools
 
-- **search_plugins**: find plugins by name, keyword or tag.
-- **get_search_ranking**: where plugins rank in WordPress.org search for a search term, with the top results listed in order.
+- **search_plugins**: find plugins by name, keyword or tag, for several names at once.
+- **get_search_ranking**: where plugins rank in WordPress.org search for up to 5 search terms, with the top results listed in order.
 - **get_plugin_listing**: what a plugin's directory page contains: name, short description, tags in order, description length and headings, FAQ questions, screenshots, banner and icon, plus signals like support resolution and how far behind the latest WordPress release it's tested. Can check where a search keyword appears, and can return the full text of the listing: description, installation, every FAQ question and answer, other notes and the latest changelog.
 - **get_plugin_details**: installs, ratings, current version, launch and update dates, compatibility and tags.
 - **get_recent_reviews**: the 10 most recent reviews, numbered. Reviewer usernames are hidden unless you ask for them.
 - **get_release_history**: version numbers and release dates, read from the plugin's changelog.
 - **get_download_history**: downloads over a period you choose (presets like "last week" or "year to date", or exact dates), grouped daily, weekly or monthly, with release-driven spikes identified.
 
-Every tool except search accepts several plugins at once (up to 10, or 5 for download history), so comparing competitors takes one call, and one approval, rather than one per plugin. All tools are marked read-only, so clients that support it can treat them as safe to run. In Claude Desktop you can also choose to always allow a tool, so it stops asking.
+Every tool works on several plugins or search terms at once (up to 10 plugins, or 5 for download history and search ranking), so comparing competitors takes one call, and one approval, rather than one per plugin. The only exception is asking for reviewer usernames on specific review numbers, which works one plugin at a time. All tools are marked read-only, so clients that support it can treat them as safe to run. In Claude Desktop you can also choose to always allow a tool, so it stops asking.
 
 ## Installation
 
