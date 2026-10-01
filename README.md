@@ -22,7 +22,7 @@ You don't need to know a plugin's exact WordPress.org name. Claude searches for 
 
 - **search_plugins**: find plugins by name, keyword or tag.
 - **get_search_ranking**: where plugins rank in WordPress.org search for a search term, with the top results listed in order.
-- **get_plugin_listing**: what a plugin's directory page contains: name, short description, tags in order, description length and headings, FAQ questions, screenshots, banner and icon, plus signals like support resolution and how far behind the latest WordPress release it's tested. Can check where a search keyword appears.
+- **get_plugin_listing**: what a plugin's directory page contains: name, short description, tags in order, description length and headings, FAQ questions, screenshots, banner and icon, plus signals like support resolution and how far behind the latest WordPress release it's tested. Can check where a search keyword appears, and can return the full text of the listing: description, installation, every FAQ question and answer, other notes and the latest changelog.
 - **get_plugin_details**: installs, ratings, current version, launch and update dates, compatibility and tags.
 - **get_recent_reviews**: the 10 most recent reviews, numbered. Reviewer usernames are hidden unless you ask for them.
 - **get_release_history**: version numbers and release dates, read from the plugin's changelog.

@@ -33,7 +33,8 @@ MAX_REVIEW_CHARACTERS = 2000  # longer review text is cut short
 MAX_PLUGINS_PER_CALL = 10  # plugins one call can cover
 MAX_DOWNLOAD_PLUGINS_PER_CALL = 5  # download history is heavier, so fewer at once
 PARALLEL_REQUESTS = 5  # requests sent to WordPress.org at the same time
-MAX_LISTING_TEXT_CHARACTERS = 20000  # longer description text is cut short
+MAX_LISTING_TEXT_CHARACTERS = 20000  # longer listing sections are cut short
+MAX_CHANGELOG_CHARACTERS = 3000  # only the latest part of the changelog
 SHORT_DESCRIPTION_LIMIT = 150  # WordPress.org cuts short descriptions at this length
 MAX_SEARCH_DEPTH = 100  # how far down the search results the ranking tool looks
 
@@ -212,6 +213,15 @@ def strip_html(text: str) -> str:
     return re.sub(r"\s+", " ", html.unescape(text)).strip()
 
 
+def html_to_text(text: str) -> str:
+    """Like strip_html, but keeps paragraphs, headings and list items on separate lines."""
+    text = re.sub(r"<(?:br|/p|/h[1-6]|/li|/dt|/dd|/div|/tr)[^>]*>", "\n", text, flags=re.I)
+    text = re.sub(r"<li[^>]*>", "- ", text, flags=re.I)
+    text = html.unescape(re.sub(r"<[^>]+>", " ", text))
+    lines = (re.sub(r"[ \t]+", " ", line).strip() for line in text.splitlines())
+    return "\n".join(line for line in lines if line)
+
+
 def summarise_plugin(data: dict) -> dict:
     """Keep only the useful fields from the API response."""
     return {
@@ -378,6 +388,33 @@ def faq_questions(faq_html: str) -> list[str]:
     return [q for q in (strip_html(q) for q in questions) if q]
 
 
+def faq_entries(faq_html: str) -> list[dict]:
+    """The questions and answers in a plugin's FAQ section."""
+    pairs = re.findall(r"<dt[^>]*>(.*?)</dt>\s*<dd[^>]*>(.*?)</dd>", faq_html, re.S)
+    if not pairs:
+        parts = re.split(r"<h[34][^>]*>(.*?)</h[34]>", faq_html, flags=re.S)
+        pairs = list(zip(parts[1::2], parts[2::2]))
+    return [
+        {"question": strip_html(q), "answer": strip_html(a)[:MAX_REVIEW_CHARACTERS]}
+        for q, a in pairs
+        if strip_html(q)
+    ]
+
+
+def full_listing_text(sections: dict) -> dict:
+    """Every text section of a listing, as plain text."""
+    def text(key: str, limit: int = MAX_LISTING_TEXT_CHARACTERS) -> str | None:
+        return html_to_text(sections.get(key, ""))[:limit] or None
+
+    return {
+        "description": text("description"),
+        "installation": text("installation"),
+        "faq": faq_entries(sections.get("faq", "")),
+        "other_notes": text("other_notes"),
+        "changelog_latest": text("changelog", MAX_CHANGELOG_CHARACTERS),
+    }
+
+
 def keyword_check(keyword: str, data: dict, sections: dict, tags: list[str]) -> dict:
     """Where a search keyword appears in a plugin's listing."""
     phrase = keyword.strip()
@@ -398,7 +435,7 @@ def keyword_check(keyword: str, data: dict, sections: dict, tags: list[str]) -> 
 
 
 def summarise_listing(
-    data: dict, latest_wordpress: str | None, keyword: str | None, include_full_text: bool
+    data: dict, latest_wordpress: str | None, keyword: str | None, full_listing: bool
 ) -> dict:
     """The content and quality signals of a plugin's directory page."""
     sections = data.get("sections") or {}
@@ -458,8 +495,8 @@ def summarise_listing(
     }
     if keyword:
         listing["keyword_check"] = keyword_check(keyword, data, sections, tags)
-    if include_full_text:
-        listing["description_text"] = description[:MAX_LISTING_TEXT_CHARACTERS]
+    if full_listing:
+        listing["full_listing"] = full_listing_text(sections)
     return listing
 
 
@@ -616,12 +653,15 @@ async def get_plugin_listing(
             ),
         ),
     ] = None,
-    include_full_text: Annotated[
+    full_listing: Annotated[
         bool,
         Field(
             description=(
-                "Also return the full description text. Leave false unless the "
-                "user wants to read or compare the wording itself."
+                "Also return the full text of each listing: description, "
+                "installation, every FAQ question and answer, other notes and "
+                "the latest part of the changelog. Use it when the user asks "
+                "for the full listing or wants to read or compare the wording. "
+                "It's long, so for many plugins consider fewer at a time."
             )
         ),
     ] = False,
@@ -633,7 +673,8 @@ async def get_plugin_listing(
     order, description length and headings, FAQ questions, screenshots,
     banner and icon, plus signals like ratings, active installs, support
     threads resolved, and how far the "tested up to" version is behind the
-    latest WordPress release. Useful for comparing how plugins present
+    latest WordPress release. With full_listing, it also returns the full
+    text of every section. Useful for comparing how plugins present
     themselves and what might affect their search visibility. To compare
     plugins, pass all their slugs in one call.
     """
@@ -641,7 +682,7 @@ async def get_plugin_listing(
 
     async def listing(slug: str) -> dict:
         data = await fetch_plugin(slug, listing=True)
-        return summarise_listing(data, latest_wordpress, keyword, include_full_text)
+        return summarise_listing(data, latest_wordpress, keyword, full_listing)
 
     result = await for_each_plugin(slugs, listing)
     result["content_note"] = DEVELOPER_CONTENT_NOTE
