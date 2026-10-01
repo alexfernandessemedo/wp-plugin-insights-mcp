@@ -24,7 +24,8 @@ You don't need to know a plugin's exact WordPress.org name. Claude searches for 
 - **get_search_ranking**: where plugins rank in WordPress.org search for up to 5 search terms, with the top results listed in order.
 - **get_plugin_listing**: what a plugin's directory page contains: name, short description, tags in order, description length and headings, FAQ questions, screenshots, banner and icon, plus signals like support resolution and how far behind the latest WordPress release it's tested. Can check where a search keyword appears, and can return the full text of the listing: description, installation, every FAQ question and answer, other notes and the latest changelog.
 - **get_plugin_details**: installs, ratings, current version, launch and update dates, compatibility and tags.
-- **get_recent_reviews**: the 10 most recent reviews, numbered. Reviewer usernames are hidden unless you ask for them.
+- **get_recent_reviews**: the 10 most recent reviews, numbered, with the period they cover. Reviewer usernames are hidden unless you ask for them.
+- **get_review_history**: the full review history (up to the latest 600 reviews per plugin), with when each was posted and its stars, summarised by year and month. Can filter by stars and dates, and include each review's text.
 - **get_release_history**: version numbers and release dates, read from the plugin's changelog.
 - **get_download_history**: downloads over a period you choose (presets like "last week" or "year to date", or exact dates), grouped daily, weekly or monthly, with release-driven spikes identified.
 
@@ -70,7 +71,8 @@ To test the server without Claude, run `uv run mcp dev src/wp_plugin_insights_mc
 - **Downloads are not installs.** Every time an existing site updates a plugin, that counts as a download, so downloads jump after each release. The download tool gives each figure twice: as reported, and with release spikes replaced by a typical day. A typical day is the median of days outside release windows.
 - **Unexplained spikes are flagged, not removed.** A spike with no release nearby may be a release missing from the changelog, or something worth looking into.
 - **Release dates come from changelogs,** which each developer writes differently. Some versions may have no date. The latest release date always comes from WordPress.org directly.
-- **Reviews cover the latest 10 only,** so they show recent sentiment, not long-term trends.
+- **Recent reviews cover the latest 10 only,** so they show recent sentiment. For trends, use the review history.
+- **Review history reads WordPress.org's review pages,** not its API, so the first check of a plugin takes up to a minute. What it reads is saved in `~/.cache/wp-plugin-insights-mcp/`, so later checks are quick. If WordPress.org changes how those pages look, the tool says so and includes a sample to help fix it.
 - **Search positions can shift day to day.** They come from WordPress.org's plugin search API, which should closely match the directory's own search.
 - **Listing checks describe, they don't explain.** WordPress.org doesn't publish how its search ranks plugins, so the listing tool shows what each plugin does differently rather than claiming what causes a ranking.
 
@@ -82,7 +84,7 @@ To test the server without Claude, run `uv run mcp dev src/wp_plugin_insights_mc
 
 ## Known limitations
 
-- Reading reviews and changelogs relies on how WordPress.org formats them. If that format changes, those tools may return empty results.
+- Reading reviews, review history and changelogs relies on how WordPress.org formats them. If that format changes, those tools may return empty results.
 - There are no automated tests yet.
 
 ## Planned
