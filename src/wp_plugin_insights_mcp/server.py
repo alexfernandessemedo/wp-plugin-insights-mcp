@@ -817,15 +817,30 @@ async def get_recent_reviews(
             if not (include_usernames and (not wanted or number in wanted)):
                 review.pop("reviewer_username", None)
             reviews[number - 1] = {"number": number, **review}
+        dates = [d for d in (find_date(r.get("date") or "") for r in reviews) if d]
+        stars = [r["stars"] for r in reviews if r.get("stars")]
         return {
             "plugin": strip_html(plugin.get("name", "")),
             "slug": slug,
             "reviews_page": f"https://wordpress.org/support/plugin/{slug}/reviews/",
+            "total_reviews_on_wordpress_org": plugin.get("num_ratings"),
+            "reviews_returned": len(reviews),
+            "period_covered": {
+                "oldest": min(dates).isoformat(),
+                "newest": max(dates).isoformat(),
+            } if dates else None,
+            "average_stars_of_these_reviews": round(sum(stars) / len(stars), 1) if stars else None,
             "reviews": reviews,
         }
 
     result = await for_each_plugin(slugs, reviews_for)
     result["content_note"] = UNTRUSTED_CONTENT_NOTE
+    result["presenting_note"] = (
+        "Always tell the user the period these reviews cover (period_covered) "
+        "and that they are the most recent few out of the plugin's total, so "
+        "recent sentiment isn't mistaken for the plugin's whole history. When "
+        "quoting or summarising a review, say when it was posted."
+    )
     if not include_usernames:
         result["follow_up"] = (
             "Reviewer usernames are hidden by default. After presenting the "
